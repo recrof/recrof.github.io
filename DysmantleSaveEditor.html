@@ -1,0 +1,138 @@
+<html>
+	<head>
+		<script src="https://unpkg.com/pako@2.0.4/dist/pako.min.js"></script>
+		<script src="https://unpkg.com/vue@3.2.29/dist/vue.global.js"></script>
+	</head>
+	<style>
+		input[type="text"], td {
+			font-family: monospace;
+		}
+		tr:nth-child(even) {background: #eee}
+		tr:nth-child(odd) {background: #FFF}
+	</style>
+	<body>
+		<div id="app">
+			<pre>
+profile.xml location Windows: C:\Users\<b>YOUR_USERNAME</b>\AppData\Roaming\10tons\DYSMANTLE\save\0
+profile.xml location mac: /Users/<b>YOUR_USERNAME</b>/Library/Application Support/10tons/DYSMANTLE/save/0
+			</pre>
+			<input v-if="!xml" type="file" @change="loadFile($event)">
+			<button v-else @click="saveFile">save</button>
+			<br>
+			<table>
+				<template v-for="(section, sectionName) in profile">
+					<template v-for="(node, nodeName) in section">
+						<tr v-if="typeof node === 'string'">
+							<td>{{ sectionName }} > {{ nodeName }}</td>
+							<td><input type="text" v-model="section[nodeName]"></td>
+						</tr>
+						<tr v-else v-for="(attr, attrName) in node">
+							<td>{{ sectionName }} > {{ nodeName }} > {{ attrName }}</td>
+							<td><input type="text" v-model="node[attrName]"></td>
+						</tr>
+					</template>
+				</template>
+			</table>
+		</div>
+	</body>
+	<script>
+		const saveEditor = {
+			data() {
+				return {
+					xml: '',
+					profileDocument: {},
+					profile: {},
+					dom: new DOMParser(),
+				}
+			},
+			methods: {
+				loadFile(ev) {
+					let reader = new FileReader();
+					reader.onload = () => {
+						let zXML = new Uint8Array(reader.result.slice(12));
+						let tDecoder = new TextDecoder();
+						let xml = tDecoder.decode(pako.inflate(zXML));
+						this.xml = xml;
+						this.profileDocument = this.dom.parseFromString(xml, 'application/xml');
+						this.profile = this.parseProfile(this.profileDocument);
+						//console.log(xml);
+					};
+
+					reader.readAsArrayBuffer(ev.target.files[0]);
+				},
+				parseProfile(doc) {
+					let profile = {};
+					doc.querySelectorAll('root > array').forEach(array => {
+						let section = profile[array.id] = {};
+						array.querySelectorAll('node').forEach(node => {
+							// console.log(array.id, node.id, node.attributes);
+							if(node.hasAttribute('value')) {
+								section[node.id] = node.getAttribute('value');
+							} else {
+								section[node.id] = {};
+								[].forEach.call(node.attributes, attr => {
+									if(attr.name === 'id') return;
+									section[node.id][attr.name] = attr.value;
+								})
+							}
+						});
+					});
+
+					return profile;
+				},
+				serializeProfile(profile) {
+					var doc = this.dom.parseFromString('<?xml version="1.0" encoding="iso-8859-1"?><root/>', 'application/xml');
+					var rootEl = doc.querySelector('root');
+					Object.keys(profile).forEach(sectionName => {
+						let section = this.profile[sectionName];
+						let sectionEl = doc.createElement('array');
+						sectionEl.setAttribute('id', sectionName);
+						Object.keys(section).forEach(nodeName => {
+							let node = section[nodeName];
+							let nodeEl = doc.createElement('node');
+							nodeEl.setAttribute('id', nodeName);
+							if(typeof node === 'string') {
+								nodeEl.setAttribute('value', node)
+							}
+							else {
+								Object.keys(node).forEach(attrName => {
+									let attrValue = node[attrName];
+									nodeEl.setAttribute(attrName, attrValue)
+								});
+							}
+							sectionEl.appendChild(nodeEl);
+						});
+						rootEl.appendChild(sectionEl);
+					});
+
+					const serializer = new XMLSerializer();
+					return serializer.serializeToString(doc);
+				},
+				saveFile() {
+					let xml = this.serializeProfile(this.profile);
+					console.log(xml);
+					let ui8xml = new TextEncoder().encode(xml);
+					let zXML = pako.deflate(ui8xml);
+
+					let result = new Uint8Array(zXML.length + 12);
+					const view = new DataView(result.buffer);
+					// 10 tons magic number
+					view.setUint32(0, 1668558897, true);
+					// decompressed size
+					view.setUint32(4, ui8xml.length, true);
+					// compressed size
+					view.setUint32(8, zXML.length, true);
+					result.set(zXML, 12);
+					let downloadLinkEl = document.createElement('a');
+					let blobURL = URL.createObjectURL(new Blob([result.buffer], {type: 'application/octet-stream'}));
+					downloadLinkEl.setAttribute('href', blobURL);
+					downloadLinkEl.setAttribute('download', 'profile.xml');
+					downloadLinkEl.click();
+					URL.revokeObjectURL(blobURL);
+				}
+			}
+		};
+
+		Vue.createApp(saveEditor).mount('#app');
+	</script>
+</html>
